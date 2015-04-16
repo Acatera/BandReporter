@@ -1,0 +1,6 @@
+*.dcu
+/Test.txt
+/BandReport.identcache
+/BandReport.exe
+/BandReport.dsk
+*.$$$
