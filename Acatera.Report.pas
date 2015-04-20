@@ -3,15 +3,11 @@ unit Acatera.Report;
 interface
 
 uses
-  Variants, Contnrs, DB;
+  Variants, Contnrs, DB, SysUtils, Classes;
 
 type
   TDataType = (dtNumber, dtString);
   TAlign = (alLeft, alRight, alCenter);
-
-  // TCell = record
-  //   Value: string;
-  // end;
 
   TCellProperty = record
     Size: integer;
@@ -30,6 +26,7 @@ type
   TBand = class;
   TBands = class(TObjectList);
 
+  TWorkNotifyEvent = procedure(WorkDone, TotalWork: Integer) of object;
   TReport = class
   private
     fActualRowCount: Integer;
@@ -39,6 +36,8 @@ type
     fRows: TRows;
     fRowCount: integer;
     fColCount: integer;
+    fDataSet: TDataSet;
+    fParams: TStringList;
     function GetCell(Col, Row: Integer): string;
     procedure SetCell(Col, Row: Integer; Value: string);
     procedure SetCapacity(Cols, Rows: Integer);
@@ -49,112 +48,140 @@ type
     procedure SetCol(Index: SmallInt; const Value: PCellProperty);
     procedure SetBandEvents;
     function FormatCell(X, Y: Integer): string;
+    procedure FillParams;
   public
-    fDataSet: TDataSet;
-    property Bands: TBands read fBands;
-    property Cells[Col, Row: Integer]: string read GetCell write SetCell;
-    property ColCount: integer read fColCount;
-    property RowCount: integer read fRowCount;
-    property Cols[Index: SmallInt]: PCellProperty read GetCol write SetCol; default;
-    property Rows[Index: SmallInt]: PCellProperty read GetRow;
-    constructor Create(Cols, Rows: integer);
-    procedure RenderToFile(FileName: string);
     procedure AfterConstruction; override;
     procedure BeforeDestruction; override;
+    constructor Create(Cols, Rows: integer);
+    procedure Execute;
+    procedure RenderToFile(FileName: string);
     procedure GrowRowCount(Value: integer);
+    property Cells[Col, Row: Integer]: string read GetCell write SetCell;
+    property Cols[Index: SmallInt]: PCellProperty read GetCol write SetCol; default;
+    property Rows[Index: SmallInt]: PCellProperty read GetRow;
+  published  
+    property Bands: TBands read fBands;
+    property ColCount: integer read fColCount;
+    property DataSet: TDataSet read fDataSet write fDataSet;
+    property RowCount: integer read fRowCount;
   end;
 
   TBandEvent = procedure(Event: TObject) of object;
+
+  TVarArray = array of Variant;
   
   TAccumulatorOp = (acNone, acAddition, acSubtraction, acMultiply, acDivide, acPower, acRoot);
+  
   TAccumulator = class
-    fDrivenByCol: SmallInt;
-    fLastCodeValue: Variant;
+  strict private
+    fDisplayName: string;
+    fDriverColumns: TBytes;
     fIsInitialized: boolean;
-    fOp: TAccumulatorOp;
-    fValue: Variant;
-    fColID: Smallint;
-    procedure AddValue(Value: Variant);
+    fIsMarkedForRendering: Boolean;
+    fOperation: TAccumulatorOp;
+    fSubtotalColumns: TBytes;
+  private  
+    fLastCodeValue: Variant; //need it here for the other classes in this unit to access;
+    fValues: TVarArray;      //same as above;
+    procedure SetSubtotalColumns(const Value: TBytes);
+    procedure SetDriverColumns(const Value: TBytes);
+  public
+    procedure AddValue(ColID: Byte; Value: Variant); 
+    function IsInitialized: Boolean;
+    procedure Initialized;
+    function IsMarkedForRendering: Boolean;
+    procedure MarkForRendering;
+    procedure UnmarkForRendering;
+  published
+    property DisplayName: string read fDisplayName write fDisplayName;
+    property DriverColumns: TBytes read fDriverColumns write SetDriverColumns;
+    property Operation: TAccumulatorOp read fOperation write fOperation;
+    property SubtotalColumns: TBytes read fSubtotalColumns write SetSubtotalColumns;
   end;
+  
   TAccumulatorList = class(TObjectList);
   
   TOccurence = (atNewPage, atChangeID, atEachRow, atPageEnd);
+  
   TBand = class
-    fAccumulators: TAccumulatorList;
-    fOwner: TReport;
+  strict private
     fOccurence: TOccurence;
-    fDataSet: TDataSet;
-    fOnBeforeRender: TBandEvent;
     fOnAfterRender: TBandEvent;
+    fOnBeforeRender: TBandEvent;
     fOnSubtotalColChange: TBandEvent; 
-    procedure Render(Data: TObject); virtual; abstract;
+    fOnWorkProgress: TWorkNotifyEvent;
+    fAccumulators: TAccumulatorList;
+  protected 
+    fDataSet: TDataSet;
+    fOwner: TReport;
+    function FormatDiplayText(Str: string): string;
   public
     procedure AfterConstruction; override;
     procedure BeforeDestruction; override;
+    procedure Execute(Data: TObject); virtual; abstract;
+  published 
+    property Accumulators: TAccumulatorList read fAccumulators write fAccumulators;
+    property Occurence: TOccurence read fOccurence write fOccurence;
+    property OnAfterRender: TBandEvent read fOnAfterRender write fOnAfterRender;
+    property OnBeforeRender: TBandEvent read fOnBeforeRender write fOnBeforeRender;
+    property OnSubtotalColChange: TBandEvent read fOnSubtotalColChange write fOnSubtotalColChange;
+    property OnWorkProgress: TWorkNotifyEvent read fOnWorkProgress write fOnWorkProgress;
   end;
 
   TDetailBand = class(TBand)
+  strict private
+    procedure InitializeAccumulator(Acc: TAccumulator);
+    procedure AddValuesToAccumutator(Acc: TAccumulator);
+    function GetCodeValueForAccumulator(Acc: TAccumulator): string;
+    procedure AppendParams(Params: TStringList);
+  public  
     constructor Create(Owner: TReport);
-    procedure Render(Data: TObject); override;
+    procedure Execute(Data: TObject); override;
   end;
+  
   TTitleBand = class(TBand)
     constructor Create(Owner: TReport);
-    procedure Render(Data: TObject); override;
+    procedure Execute(Data: TObject); override;
   end;
 
   TSubtitleBand = class(TBand)
     constructor Create(Owner: TReport);
-    procedure Render(Data: TObject); override;
+    procedure Execute(Data: TObject); override;
   end;
-  
-  (*
-    Phase 1:
-    [x] Render as text file (for now) - temporary;
-    [x] Implement default cell values (width, heigth, align, data type);
-
-    Phase 2:
-    [x] Implement bands (title, detail, (sub)total);
-    
-    Phase 3:
-    [x] Fix GrowRowCountBy(xyz);
-    [x] Implement a way to render the bands in a way that makes them "connected" to eachother (OnBeforeRender?)
-    [x] Each band can hold it's own variables, for sum purposes (the AccumulatorList);
-
-    [ ] Each Accumulator should have it's own subtotal band; Think about this... sounds restricting
-    
-    Phase 4:
-    [ ] Implement persistency (dfm file?);
-
-    Phase 5:
-    [ ] Cell merging
-
-    Phase 6:
-    [ ] Excel export
-
-    Phase 6:
-    [ ] Cell font, borders, color;
-  *)
 
 implementation
 
 uses
-  SysUtils, StrUtils, Acatera.Utils, Windows, Classes;
+  StrUtils, Acatera.Utils, Windows;
 
 { TReport }
 
 procedure TReport.AfterConstruction;
 begin
   fBands := TBands.Create(True);
+  fParams := TStringList.Create;
 end;
 
 procedure TReport.BeforeDestruction;
 begin
   fBands.Free;
+  fParams.Free;
 end;
 
 constructor TReport.Create(Cols, Rows: integer);
 begin
   SetCapacity(Cols, Rows);
+end;
+
+procedure TReport.FillParams;
+var
+  i: integer;
+begin
+  //Column names
+  if (fDataSet <> nil) then begin
+    for i := 0 to fDataSet.FieldCount - 1 do
+      fParams.Add(Format('%%columnNames[%d]%%=%s', [i, fDataSet.Fields[i].DisplayName]));
+  end;
 end;
 
 function TReport.FormatCell(X, Y: Integer): string;
@@ -211,6 +238,19 @@ begin
   end;
 end;
 
+procedure TReport.Execute;
+var
+  i: Integer;
+begin
+  FillParams;
+  for i := 0 to fBands.Count - 1 do begin
+    if (TBand(fBands[i]).Occurence = atEachRow) then
+    begin
+      TBand(fBands[i]).Execute(fDataSet);
+    end;
+  end;
+end;
+
 procedure TReport.RenderToFile(FileName: string);
 var
   Buffer: string;
@@ -221,11 +261,6 @@ begin
   if (Trim(FileName) <> '') then begin
     Output := TStringList.Create;
     try
-      for Y := 0 to fBands.Count - 1 do begin
-        if (TBand(fBands[Y]).fOccurence = atEachRow) then begin
-          TBand(fBands[Y]).Render(fDataSet);
-        end;
-      end;
       Output.Capacity := fRowCount;
       for Y := 0 to fRowCount - 1 do begin
         Buffer := '';
@@ -253,9 +288,9 @@ var
   i: SmallInt;
 begin
   for i := 0 to fBands.Count - 1 do begin
-    if (TBand(fBands[i]).fOccurence = atEachRow) then
-      if ((i > 0) and (TBand(fBands[i - 1]).fOccurence = atNewPage)) then
-        TBand(fBands[i]).fOnBeforeRender := TBand(fBands[i - 1]).Render;
+    if (TBand(fBands[i]).Occurence = atEachRow) then
+      if ((i > 0) and (TBand(fBands[i - 1]).Occurence = atNewPage)) then
+        TBand(fBands[i]).OnBeforeRender := TBand(fBands[i - 1]).Execute;
   end;
 end;
 
@@ -308,58 +343,107 @@ end;
 
 { TBand }
 
+procedure TDetailBand.AppendParams(Params: TStringList);
+var
+  i: Integer;
+begin
+  if ((Params <> nil) and (fDataSet <> nil)) then begin
+    for i := 0 to fDataSet.FieldCount - 1 do
+      Params.Values[Format('%%lastValues[%d]%%', [i])] := fDataSet.Fields[i].AsString;
+  end;
+end;
+
 constructor TDetailBand.Create(Owner: TReport);
 begin
   fOwner := Owner;
-  fOccurence := atEachRow;
+  Occurence := atEachRow;
 end;
 
-procedure TDetailBand.Render(Data: TObject);
+procedure TDetailBand.Execute(Data: TObject);
 var
   i, j: Integer;
   ShouldRenderSubtotal: Boolean;
+  Acc: TAccumulator;
+  RecNo: integer;
 begin
-  if (Assigned(fOnBeforeRender)) then
-    fOnBeforeRender(Data);
+  if (Assigned(OnBeforeRender)) then
+    OnBeforeRender(Data);
     
   if (Data <> nil) and (Data is TDataSet) then begin
     fDataSet := TDataSet(Data);
+    
+    RecNo := 0;
     while (not fDataSet.Eof) do begin
-      for i := 0 to fAccumulators.Count - 1 do begin
-        if (not TAccumulator(fAccumulators[i]).fIsInitialized) then begin
-          TAccumulator(fAccumulators[i]).fLastCodeValue := fDataSet.Fields[TAccumulator(fAccumulators[i]).fDrivenByCol].AsString;
-          TAccumulator(fAccumulators[i]).fIsInitialized := True;
+      for i := 0 to Accumulators.Count - 1 do begin //Initialize and add values;
+        Acc := TAccumulator(Accumulators[i]);
+        if (not Acc.IsInitialized) then begin
+          InitializeAccumulator(Acc);
         end;
-        TAccumulator(fAccumulators[i]).AddValue(fDataSet.Fields[TAccumulator(fAccumulators[i]).fColID].AsVariant);
+        AddValuesToAccumutator(Acc);
       end;
     
-      fOwner.GrowRowCount(1);
+      fOwner.GrowRowCount(1); //Render row;
       for j := 0 to fDataSet.FieldCount - 1 do begin
         fOwner.Cells[j, fOwner.RowCount - 1] := fDataSet.Fields[j].AsString;
       end;
+
+      AppendParams(fOwner.fParams);
       
       fDataSet.Next;
       
-      for i := 0 to fAccumulators.Count - 1 do begin
-        if (fDataSet.Fields[TAccumulator(fAccumulators[i]).fDrivenByCol].AsString <> TAccumulator(fAccumulators[i]).fLastCodeValue) then begin
+      for i := 0 to Accumulators.Count - 1 do begin
+        Acc := TAccumulator(Accumulators[i]);
+        if (Acc.fLastCodeValue <>  GetCodeValueForAccumulator(Acc)) then begin
+          Acc.MarkForRendering;
           ShouldRenderSubtotal := True;
-          TAccumulator(fAccumulators[i]).fLastCodeValue := fDataSet.Fields[TAccumulator(fAccumulators[i]).fDrivenByCol].AsString;
+          Acc.fLastCodeValue := GetCodeValueForAccumulator(Acc);
         end;
       end;
-      if (Assigned(fOnSubtotalColChange) and (ShouldRenderSubtotal)) then begin
-        fOnSubtotalColChange(fAccumulators);
+      if (Assigned(OnSubtotalColChange) and (ShouldRenderSubtotal)) then begin
+        OnSubtotalColChange(Accumulators);
         ShouldRenderSubtotal := False;
       end;
+      if (Assigned(OnWorkProgress)) then //OnWorkDone;
+        OnWorkProgress(RecNo, fDataSet.RecordCount);
+      Inc(RecNo);
     end;
+
+    if (Assigned(OnWorkProgress)) then //OnWorkDone;
+      OnWorkProgress(RecNo, fDataSet.RecordCount);
+      
     fDataSet := nil;
   end;
-  
-  if (Assigned(fOnSubtotalColChange)) then begin
-    fOnSubtotalColChange(fAccumulators);
-  end;
+
+  if (Assigned(OnSubtotalColChange)) then //Last subtotal
+    OnSubtotalColChange(Accumulators);
       
-  if (Assigned(fOnAfterRender)) then
-    fOnAfterRender(Data);
+  if (Assigned(OnAfterRender)) then //End of document, etc
+    OnAfterRender(Data);
+end;
+
+function TDetailBand.GetCodeValueForAccumulator(Acc: TAccumulator): string;
+var
+  i: Byte;
+begin
+  Result := '';
+  for i := 0 to Length(Acc.DriverColumns) - 1 do begin
+    Result := Result + fDataSet.Fields[Acc.DriverColumns[i]].AsString;
+  end;
+end;
+
+procedure TDetailBand.AddValuesToAccumutator(Acc: TAccumulator);
+var
+  i: integer;
+begin
+  for i := 0 to Length(Acc.SubtotalColumns) - 1 do begin
+    Acc.AddValue(i, fDataSet.Fields[Acc.SubtotalColumns[i]].AsVariant);
+  end;
+end;
+
+procedure TDetailBand.InitializeAccumulator(Acc: TAccumulator);
+begin
+  Acc.fLastCodeValue := GetCodeValueForAccumulator(Acc);
+  Acc.Initialized;
 end;
 
 { TBand }
@@ -374,20 +458,34 @@ begin
   fAccumulators.Free;
 end;
 
+function TBand.FormatDiplayText(Str: string): string;
+var
+  i: Integer;
+begin
+  Result := Trim(Str);
+  
+  if ((Pos('%', Result) = 0) or (Result = '')) then
+    Exit;
+  
+  for i := 0 to fOwner.fParams.Count - 1 do begin
+    Result := StringReplace(Result, fOwner.fParams.Names[i], fOwner.fParams.ValueFromIndex[i], [rfReplaceAll, rfIgnoreCase]);
+  end;
+end;
+
 { TTitleBand }
 
 constructor TTitleBand.Create(Owner: TReport);
 begin
   fOwner := Owner;
-  fOccurence := atNewPage;
+  Occurence := atNewPage;
 end;
 
-procedure TTitleBand.Render(Data: TObject);
+procedure TTitleBand.Execute(Data: TObject);
 var
   i: Integer;
 begin
-  if (Assigned(fOnBeforeRender)) then
-    fOnBeforeRender(Data);
+  if (Assigned(OnBeforeRender)) then
+    OnBeforeRender(Data);
     
   if (Data <> nil) and (Data is TDataSet) then begin
     fDataSet := TDataSet(Data);
@@ -397,8 +495,8 @@ begin
     end;
   end;
 
-  if (Assigned(fOnAfterRender)) then
-    fOnAfterRender(Data);
+  if (Assigned(OnAfterRender)) then
+    OnAfterRender(Data);
 end;
 
 { TSubtitleBand }
@@ -406,43 +504,89 @@ end;
 constructor TSubtitleBand.Create(Owner: TReport);
 begin
   fOwner := Owner;
-  fOccurence := atChangeID;
+  Occurence := atChangeID;
 end;
 
-procedure TSubtitleBand.Render(Data: TObject);
+procedure TSubtitleBand.Execute(Data: TObject);
 var
   i: Integer;
   Accumulators: TAccumulatorList;
+  Acc: TAccumulator;
+  acIdx: Integer;
 begin
-  if (Assigned(fOnBeforeRender)) then
-    fOnBeforeRender(Data);
+  if (Assigned(OnBeforeRender)) then
+    OnBeforeRender(Data);
     
   if (Data <> nil) and (Data is TAccumulatorList) then begin
     Accumulators := TAccumulatorList(Data);
-    fOwner.GrowRowCount(1);
     for i := 0 to Accumulators.Count - 1 do begin
-      fOwner.Cells[0, fOwner.RowCount - 1] := '[Subtotal]';
-      fOwner.Cells[TAccumulator(Accumulators[I]).fColID, fOwner.RowCount - 1] := VarToStr(TAccumulator(Accumulators[I]).fValue);
-      TAccumulator(Accumulators[I]).fValue := Null;
+      Acc := TAccumulator(Accumulators[i]);
+      if (Acc.IsMarkedForRendering) then begin
+        fOwner.GrowRowCount(1);
+        fOwner.Cells[0, fOwner.RowCount - 1] := FormatDiplayText(Acc.DisplayName);
+        for acIdx := 0 to Length(Acc.SubtotalColumns) - 1 do begin
+          fOwner.Cells[Acc.SubtotalColumns[acIdx], fOwner.RowCount - 1] := VarToStr(Acc.fValues[acIdx]);
+          Acc.fValues[acIdx] := Null;
+        end;
+        Acc.UnmarkForRendering;
+      end;                         
     end;
   end;
 
-  if (Assigned(fOnAfterRender)) then
-    fOnAfterRender(Data);
+  if (Assigned(OnAfterRender)) then
+    OnAfterRender(Data);
 end;
 
 { TAccumulator }
 
-procedure TAccumulator.AddValue(Value: Variant);
+procedure TAccumulator.AddValue(ColID: Byte; Value: Variant);
 begin
-  if (VarIsNumber(fValue)) then
-    fValue := fValue + StrToFloatDef(Value, 0)
+  if (VarIsNumber(fValues[ColID])) then
+    fValues[ColID] := fValues[ColID] + StrToFloatDef(Value, 0)
   else begin
-    if (fValue = Null) then
-      fValue := Value
+    if (fValues[ColID] = Null) then
+      fValues[ColID] := Value
     else  
-      fValue := fValue + Value;
+      fValues[ColID] := fValues[ColID] + Value;
   end;
+end;
+
+function TAccumulator.IsInitialized: Boolean;
+begin
+  Result := fIsInitialized;
+end;
+
+function TAccumulator.IsMarkedForRendering: Boolean;
+begin
+  Result := fIsMarkedForRendering;
+end;
+
+procedure TAccumulator.MarkForRendering;
+begin
+  fIsMarkedForRendering := True;
+end;
+
+procedure TAccumulator.Initialized;
+begin
+  fIsInitialized := True;
+end;
+
+procedure TAccumulator.SetDriverColumns(const Value: TBytes);
+begin
+  SetLength(fDriverColumns, 0);
+  fDriverColumns := Value;
+end;
+
+procedure TAccumulator.SetSubtotalColumns(const Value: TBytes);
+begin
+  SetLength(fSubtotalColumns, 0);
+  fSubtotalColumns := Value;
+  SetLength(fValues, Length(Value));
+end;
+
+procedure TAccumulator.UnmarkForRendering;
+begin
+  fIsMarkedForRendering := False;
 end;
 
 end.

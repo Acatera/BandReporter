@@ -17,6 +17,9 @@
   <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'Debug|AnyCPU' ">
     <Version>7.0</Version>
     <DCC_Define>DEBUG</DCC_Define>
+    <DCC_DcuOutput>.\DCUs</DCC_DcuOutput>
+    <DCC_ObjOutput>.\DCUs</DCC_ObjOutput>
+    <DCC_HppOutput>.\DCUs</DCC_HppOutput>
   </PropertyGroup>
   <ProjectExtensions>
     <Borland.Personality>Delphi.Personality</Borland.Personality>

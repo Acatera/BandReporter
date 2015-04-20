@@ -4,21 +4,24 @@ interface
 
 uses
   Windows, Messages, SysUtils, Variants, Classes, Graphics, Controls, Forms,
-  Dialogs, StdCtrls, Grids, DB, ADODB, Acatera.Report, ComCtrls;
+  Dialogs, StdCtrls, Grids, DB, ADODB, Acatera.Report, ComCtrls, Gauges, ExtCtrls;
 
 type
   TFMainGUI = class(TForm)
-    grd1: TStringGrid;
-    btn1: TButton;
+    btnRender: TButton;
     Button: TButton;
     qry1: TADOQuery;
     con1: TADOConnection;
     stat1: TStatusBar;
-    procedure btn1Click(Sender: TObject);
-    procedure Test(Sender: TObject);
+    Gauge1: TGauge;
+    GridPanel1: TGridPanel;
+    pnl1: TPanel;
+    edt1: TEdit;
+    lbl1: TLabel;
+    procedure btnRenderClick(Sender: TObject);
     procedure ButtonClick(Sender: TObject);
   private
-    procedure RenderReport(Report: TReport);
+    procedure UpdateGauge(WorkDone, WorkTotal: integer);
   end;
 
 var
@@ -31,7 +34,7 @@ uses
 
 {$R *.dfm}
 
-procedure TFMainGUI.btn1Click(Sender: TObject);
+procedure TFMainGUI.btnRenderClick(Sender: TObject);
 var
   i: Integer;
   j: Integer;
@@ -41,39 +44,57 @@ var
   SubtotalBand: TSubtitleBand;
   Report: TReport;
   LastTickCount: cardinal;
+  QueryTicks: Cardinal;
+  ReportExecuteTicks: Cardinal;
+  CurrentTicks: Cardinal;
 begin
   LastTickCount := GetTickCount;
   Report := TReport.Create(9, 0);
   try
     qry1.Active := True;
     qry1.First;
+    QueryTicks := GetTickCount;
     
-    Report.fDataSet := qry1;
+    Report.DataSet := qry1;
     
     TitleBand := TTitleBand.Create(Report);
     Report.Bands.Add(TitleBand);
     
     DetailBand := TDetailBand.Create(Report);
-    DetailBand.fAccumulators.Add(TAccumulator.Create);
-    with (TAccumulator(DetailBand.fAccumulators[0])) do begin
-      fOp := acAddition;
-      fDrivenByCol := 0;
-      fColID := 7;
+    DetailBand.Accumulators.Add(TAccumulator.Create);
+    with (TAccumulator(DetailBand.Accumulators[0])) do begin
+      DisplayName := 'Total doc. %lastValues[3]% / %lastValues[4]%';
+      DriverColumns := TBytes.Create(0, 1, 3, 4);
+      SubtotalColumns := TBytes.Create(7, 8);
+      Operation := acAddition;
     end;
-    DetailBand.fAccumulators.Add(TAccumulator.Create);
-    with (TAccumulator(DetailBand.fAccumulators[1])) do begin
-      fOp := acAddition;
-      fDrivenByCol := 0;
-      fColID := 8;
+    
+    DetailBand.Accumulators.Add(TAccumulator.Create);
+    with (TAccumulator(DetailBand.Accumulators[1])) do begin
+      DisplayName := 'Total Tip Document';
+      Operation := acAddition;
+      DriverColumns := TBytes.Create(0, 1);
+      SubtotalColumns := TBytes.Create(7, 8);
     end;
-    DetailBand.fOnBeforeRender := TitleBand.Render;
+
+    DetailBand.Accumulators.Add(TAccumulator.Create);
+    with (TAccumulator(DetailBand.Accumulators[2])) do begin
+      DisplayName := 'Total %columnNames[1]%';
+      Operation := acAddition;
+      DriverColumns := TBytes.Create(0);
+      SubtotalColumns := TBytes.Create(7, 8);
+    end;
+    
+    DetailBand.OnBeforeRender := TitleBand.Execute;
+    DetailBand.OnWorkProgress := UpdateGauge;
+
     Report.Bands.Add(DetailBand);
     
     SubtotalBand := TSubtitleBand.Create(Report);
-    DetailBand.fOnSubtotalColChange := SubtotalBand.Render;
+    DetailBand.OnSubtotalColChange := SubtotalBand.Execute;
     Report.Bands.Add(SubtotalBand);
     
-    Report.Cols[0].Size := 10;
+    Report.Cols[0].Size := 20;
     Report.Cols[1].Size := 1;
     Report.Cols[2].Size := 20;
     Report.Cols[3].Align := alRight;
@@ -84,8 +105,8 @@ begin
     Report.Cols[6].Align := alRight;
     Report.Cols[7].Size := 10;
     Report.Cols[6].DataType := dtNumber;
-    Report.Cols[6].Formatting := '%.3f';
-    
+    Report.Cols[6].Formatting := '%.3f';              
+
     Report.Cols[7].Align := alRight;
     Report.Cols[7].Size := 14;
     Report.Cols[7].DataType := dtNumber;
@@ -96,12 +117,15 @@ begin
     Report.Cols[8].DataType := dtNumber;
     Report.Cols[8].Formatting := '%.2f';
     
-    RenderReport(Report);
-    Report.RenderToFile('Test.txt');
+    Report.Execute;
+    ReportExecuteTicks := GetTickCount;
+    
+    Report.RenderToFile(edt1.Text);
   finally
     Report.Free;
   end;
-  stat1.SimpleText := IntToStr(GetTickCount - LastTickCount);
+  CurrentTicks := GetTickCount;
+  stat1.SimpleText := Format('Query: %d; Execution: %d; Total: %d', [QueryTicks - LastTickCount, ReportExecuteTicks - QueryTicks, CurrentTicks - LastTickCount]);
 end;
 
 procedure TFMainGUI.ButtonClick(Sender: TObject);
@@ -133,57 +157,16 @@ begin
   ShowMessage(IntToStr(GetTickCount - LastTick));
 end;
 
-procedure TFMainGUI.RenderReport(Report: TReport);
+procedure TFMainGUI.UpdateGauge(WorkDone, WorkTotal: integer);
 var
-  i: Integer;
-  j: Integer;
+  WorkPerPercent: Integer;
 begin
-  for i := 0 to Report.RowCount - 1 do
-    for j := 0 to Report.ColCount - 1 do
-      grd1.Cells[j, i + 1] := Report.Cells[j, i];
+  WorkPerPercent := Round(WorkTotal / 100);
+  if (Gauge1.MaxValue <> WorkTotal) then
+    Gauge1.MaxValue := WorkTotal;
+  Gauge1.Progress := WorkDone;
+  if (WorkDone mod WorkPerPercent = 0) then
+    Application.ProcessMessages;
 end;
-
-procedure TFMainGUI.Test(Sender: TObject);
-var
-  Test: string;
-begin
-  Test := 'This is a test';
-end;
-{
-var
-   row,col:integer;
-   SetAtribut:TSetOfAtribut;
-begin
-   row:=StrToInt(ERow.text);
-   col:=StrToInt(ECol.text);
-   SetAtribut:=[];
-
-   if CBShaded.Checked then Include(SetAtribut,acShaded);
-   if CBBottomBorder.Checked then Include(SetAtribut,acBottomBorder);
-   if CBTopBorder.Checked then Include(SetAtribut,acTopBorder);
-   if CBLeftBorder.Checked then Include(SetAtribut,acLeftBorder);
-   if CBRightBorder.Checked then Include(SetAtribut,acRightBorder);
-   if RBLeftAllign.Checked then Include(SetAtribut,acLeft) else
-   if RBRightAllign.Checked then Include(SetAtribut,acRight) else
-   if RBCenterAllign.Checked then Include(SetAtribut,acCenter) else
-   if RBFillAllign.Checked then Include(SetAtribut,acFill);
-
-
-   //You can use directly like this: AddWordCell(1,1,[acBottomBorder,acTopBorder],200);
-   case RGType.ItemIndex  of
-      0: XLSFIle1.AddWordCell(col,row,SetAtribut,StrToInt(Evalue.text));
-      1: XLSFIle1.AddDoubleCell(col,row,SetAtribut,StrToFloat(Evalue.text));
-      2: XLSFIle1.AddStrCell(col,row,SetAtribut,Evalue.text);
-   end;
-   ERow.text:='';
-   ECol.text:='';
-   Evalue.text:='';
-end;
-
-procedure TForm1.BclearClick(Sender: TObject);
-begin
-     XLSfile1.clear; 
-end;
-}
 
 end.
